@@ -1,15 +1,16 @@
-# Terraform runtime
-.terraform/
+# Terraform
 **/.terraform/*
 *.tfstate
 *.tfstate.*
-.terraform.tfstate.lock.info
-# planes
-tfplan*
-*.plan
-# credenciales/vars
+crash.log
+crash.*.log
+*.tfplan
 *.tfvars
-environments/**/terraform.tfvars
-# IDE/OS
-.vscode/
+*.tfvars.json
+
+# Opcional: si guardas credenciales locales
+.terraformrc
+terraform.rc
+
+# Logs/OS
 .DS_Store
