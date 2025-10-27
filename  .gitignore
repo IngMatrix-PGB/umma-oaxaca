@@ -1,0 +1,15 @@
+# Terraform runtime
+.terraform/
+**/.terraform/*
+*.tfstate
+*.tfstate.*
+.terraform.tfstate.lock.info
+# planes
+tfplan*
+*.plan
+# credenciales/vars
+*.tfvars
+environments/**/terraform.tfvars
+# IDE/OS
+.vscode/
+.DS_Store
