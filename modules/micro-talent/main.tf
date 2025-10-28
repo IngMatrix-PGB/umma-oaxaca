@@ -79,8 +79,12 @@ resource "aws_iam_instance_profile" "ec2_profile_overflow" {
   role = module.iam_ec2_overflow.iam_role_name
 }
 
-data "aws_ssm_parameter" "al2023_arm" {
-  name = "/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-6.1-arm64"
+data "aws_ssm_parameter" "al2023_x86" {
+  name = "/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-6.1-x86_64"
+}
+
+locals {
+  ec2_ami = data.aws_ssm_parameter.al2023_x86.value
 }
 
 module "ec2" {
@@ -88,7 +92,7 @@ module "ec2" {
   version = "~> 6.0"
 
   name                        = "${local.base_name}-ec2"
-  ami                         = data.aws_ssm_parameter.al2023_arm.value
+  ami                         = local.ec2_ami
   instance_type               = var.instance_type
   subnet_id                   = module.vpc.public_subnets[0]
   associate_public_ip_address = true
