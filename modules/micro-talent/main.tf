@@ -97,6 +97,13 @@ module "ec2" {
   user_data_replace_on_change = true
   iam_instance_profile        = aws_iam_instance_profile.ec2_profile_overflow.name
   enable_volume_tags          = true
+
+  #  Garantiza que cloud-init pueda usar IMDS y ejecute user_data
+    metadata_options = {
+    http_endpoint               = "enabled"
+    http_tokens                 = "optional"
+    http_put_response_hop_limit = 2
+  }
 }
 
 module "ecr" {
