@@ -118,7 +118,14 @@ module "ecr" {
   repository_image_scan_on_push = true
   repository_force_delete       = true
   create_lifecycle_policy       = true
-  repository_lifecycle_policy   = jsonencode({ rules = [{ rulePriority = 1, description = "keep last 10", selection = { tagStatus = "any", countType = "imageCountMoreThan", countNumber = 10 }, action = { type = "expire" } }] })
+  repository_lifecycle_policy   = jsonencode({
+    rules = [{
+      rulePriority = 1,
+      description  = "keep last 10",
+      selection    = { tagStatus = "any", countType = "imageCountMoreThan", countNumber = 10 },
+      action       = { type = "expire" }
+    }]
+  })
 }
 
 module "rds" {
