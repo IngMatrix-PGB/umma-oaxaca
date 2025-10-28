@@ -1,0 +1,125 @@
+name: Deploy AWS Lab Playground
+
+on:
+  push:
+    branches: [ main, clean-main ]
+  workflow_dispatch:
+    inputs:
+      action:
+        description: "Acción a ejecutar"
+        required: true
+        default: "deploy"
+        type: choice
+        options: [deploy, destroy]
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  AWS_REGION: ${{ secrets.AWS_REGION }}
+  AWS_ACCOUNT_ID: ${{ secrets.AWS_ACCOUNT_ID }}
+  ECR_REPOSITORY: ${{ secrets.ECR_REPOSITORY }}
+  # Opcional, endurece TF en CI
+  TF_IN_AUTOMATION: "1"
+  TF_INPUT: "0"
+
+concurrency:
+  group: umma-oaxaca-${{ github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    if: ${{ github.event_name == 'push' || inputs.action == 'deploy' }}
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.6.6
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build, tag and push Docker image
+        run: |
+          set -euo pipefail
+          IMAGE_URI=${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:dev-${GITHUB_SHA::7}
+          docker build -t "$IMAGE_URI" ./docker
+          docker push "$IMAGE_URI"
+          echo "IMAGE_URI=$IMAGE_URI" >> $GITHUB_ENV
+
+      - name: Terraform Init
+        run: terraform init -backend-config="environments/development/backend.hcl"
+
+      # Evita 'RepositoryAlreadyExistsException' al plan/apply
+      - name: Terraform import ECR if exists
+        run: |
+          set -euo pipefail
+          if aws ecr describe-repositories --region "$AWS_REGION" --repository-names "$ECR_REPOSITORY" >/dev/null 2>&1; then
+            terraform import -no-color 'module.micro_talent.module.ecr.aws_ecr_repository.this[0]' "$ECR_REPOSITORY" || true
+            terraform import -no-color 'module.micro_talent.module.ecr.aws_ecr_repository_policy.this[0]' "$ECR_REPOSITORY" || true
+            terraform import -no-color 'module.micro_talent.module.ecr.aws_ecr_lifecycle_policy.this[0]' "$ECR_REPOSITORY" || true
+          fi
+
+      - name: Terraform Plan
+        run: |
+          terraform plan \
+            -var-file="environments/development/terraform.tfvars" \
+            -var "docker_image=${IMAGE_URI}" \
+            -out=tfplan-dev
+
+      - name: Terraform Apply
+        run: terraform apply -auto-approve tfplan-dev
+
+  destroy:
+    if: ${{ inputs.action == 'destroy' }}
+    runs-on: ubuntu-latest
+    # Opción A (recomendada): protege con un Environment y reviewers en Settings > Environments
+    # environment: development
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.6.6
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      # Opción B: Aprobación manual dentro del job (si no usas Environments)
+      - name: Manual approval
+        if: ${{ env.USE_INLINE_APPROVAL == '1' }}
+        uses: trstringer/manual-approval@v1
+        with:
+          secret: ${{ github.TOKEN }}
+          approvers: ${{ secrets.APPROVERS }} # ej. "IngMatrix-PGB,otro-user"
+          minimum-approvals: 1
+          issue-title: "Approve terraform destroy"
+          issue-body: "Confirma para ejecutar terraform destroy en development"
+
+      - name: Terraform Init
+        run: terraform init -backend-config="environments/development/backend.hcl"
+
+      - name: Terraform Destroy
+        run: |
+          terraform destroy \
+            -auto-approve \
+            -var-file="environments/development/terraform.tfvars"

@@ -51,3 +51,9 @@ variable "tags_common" {
 variable "docker_image" {
   type = string
 }
+
+variable "instance_type" {
+  type        = string
+  description = "EC2 instance type (x86_64)."
+  default     = "t3.micro"
+}

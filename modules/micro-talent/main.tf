@@ -89,7 +89,7 @@ module "ec2" {
 
   name                        = "${local.base_name}-ec2"
   ami                         = data.aws_ssm_parameter.al2023_arm.value
-  instance_type               = "t4g.micro"
+  instance_type               = var.instance_type
   subnet_id                   = module.vpc.public_subnets[0]
   associate_public_ip_address = true
   vpc_security_group_ids      = [module.ec2_sg.security_group_id]
