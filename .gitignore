@@ -1,0 +1,25 @@
+# SO / IDE
+.DS_Store
+.vscode/
+.idea/
+
+# Terraform
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfplan
+crash.log
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+.terraform.lock.hcl
+
+# Variables/sensibles (NO subir)
+*.tfvars
+*.tfvars.json
+**/backend.hcl
+
+# Logs y temporales
+*.log
+tmp/
