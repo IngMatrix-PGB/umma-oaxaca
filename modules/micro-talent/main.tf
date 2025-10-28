@@ -8,27 +8,26 @@ module "vpc" {
   public_subnets  = local.public_subnets
   private_subnets = local.private_subnets
 
-  enable_nat_gateway = true
-  single_nat_gateway = true
-
-  # Asegura salida a Internet y IPs públicas en public subnets
+  # Internet para las públicas
   create_igw              = true
   map_public_ip_on_launch = true
 
-  # 🔓 NACL explícita para públicas (ALLOW ALL)
-  public_dedicated_network_acl = true
+  # NAT solo para privadas
+  enable_nat_gateway = true
+  single_nat_gateway = true
 
+  # NACL pública => allow all (evita timeouts)
+  public_dedicated_network_acl = true
   public_inbound_acl_rules = [
     {
       rule_number = 100
       protocol    = "-1"
-      rule_action = "allow"   # <- esta es la clave correcta
+      rule_action = "allow"
       cidr_block  = "0.0.0.0/0"
       from_port   = 0
       to_port     = 0
     }
   ]
-
   public_outbound_acl_rules = [
     {
       rule_number = 100
@@ -40,6 +39,7 @@ module "vpc" {
     }
   ]
 }
+
 module "ec2_sg" {
   source  = "terraform-aws-modules/security-group/aws"
   version = "~> 5.0"
@@ -125,7 +125,6 @@ module "ec2" {
   iam_instance_profile        = aws_iam_instance_profile.ec2_profile_overflow.name
   enable_volume_tags          = true
 
-  #  Garantiza que cloud-init pueda usar IMDS y ejecute user_data
   metadata_options = {
     http_endpoint               = "enabled"
     http_tokens                 = "optional"
@@ -174,4 +173,36 @@ module "rds" {
   create_db_subnet_group = true
   skip_final_snapshot    = true
   deletion_protection    = false
+}
+
+# Outputs del módulo
+output "ec2_public_ip" {
+  description = "IP pública de la instancia EC2"
+  value       = module.ec2.public_ip
+}
+
+output "ec2_instance_id" {
+  description = "ID de la instancia EC2"
+  value       = module.ec2.id
+}
+
+output "rds_endpoint" {
+  description = "Endpoint de la base de datos RDS"
+  value       = module.rds.db_instance_address
+  sensitive   = true
+}
+
+output "ecr_repository_url" {
+  description = "URL del repositorio ECR"
+  value       = module.ecr.repository_url
+}
+
+output "vpc_id" {
+  description = "ID de la VPC"
+  value       = module.vpc.vpc_id
+}
+
+output "security_group_id" {
+  description = "ID del security group de EC2"
+  value       = module.ec2_sg.security_group_id
 }

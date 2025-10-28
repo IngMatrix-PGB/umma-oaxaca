@@ -1,24 +1,23 @@
-FROM ubuntu:22.04
-ENV DEBIAN_FRONTEND=noninteractive LANG=C.UTF-8
+# Imagen base más ligera para PoC
+FROM httpd:2.4-alpine
 
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    ca-certificates curl wget gnupg sudo apt-transport-https \
-    git apache2 postgresql-client openjdk-17-jdk maven \
- && rm -rf /var/lib/apt/lists/*
+# Instalar dependencias mínimas necesarias
+RUN apk add --no-cache \
+    bash \
+    curl \
+    postgresql-client \
+    && rm -rf /var/cache/apk/*
 
-# .NET 8 SDK
-RUN mkdir -p /etc/apt/keyrings \
- && wget -O /tmp/packages-microsoft-prod.deb https://packages.microsoft.com/config/ubuntu/22.04/packages-microsoft-prod.deb \
- && dpkg -i /tmp/packages-microsoft-prod.deb \
- && rm -f /tmp/packages-microsoft-prod.deb \
- && apt-get update && apt-get install -y --no-install-recommends dotnet-sdk-8.0 \
- && rm -rf /var/lib/apt/lists/*
-
+# Instalar code-server para la demo
 RUN curl -fsSL https://code-server.dev/install.sh | sh
 
-COPY apache-hello-world/index.html /var/www/html/index.html
+# Copiar archivos de la aplicación
+COPY apache-hello-world/index.html /usr/local/apache2/htdocs/index.html
 COPY entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN chmod +x /usr/local/bin/entrypoint.sh
+
+# Configurar Apache para mostrar archivos estáticos
+RUN echo "LoadModule rewrite_module modules/mod_rewrite.so" >> /usr/local/apache2/conf/httpd.conf
 
 EXPOSE 80 8080
 CMD ["/usr/local/bin/entrypoint.sh"]

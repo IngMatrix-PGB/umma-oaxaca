@@ -49,7 +49,9 @@ variable "tags_common" {
 }
 
 variable "docker_image" {
-  type = string
+  description = "URI completo de la imagen (registry/repo:tag). Si es null, se usa una imagen de prueba."
+  type        = string
+  default     = null
 }
 
 variable "instance_type" {

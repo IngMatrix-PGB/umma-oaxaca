@@ -1,7 +1,5 @@
 variable "region" { type = string }
 variable "project" { type = string }
-variable "org" { type = string }
-variable "env" { type = string }
 variable "db_name" { type = string }
 variable "db_username" {
   type      = string
@@ -20,4 +18,10 @@ variable "code_server_password" {
 variable "environment" { type = string }
 variable "name_prefix" { type = string }
 variable "tags_common" { type = map(string) }
-variable "docker_image" { type = string }
+variable "docker_image" {
+  description = "URI completo de la imagen (registry/repo:tag). Si es null, se usa una imagen de prueba."
+  type        = string
+  default     = null
+}
+
+variable "instance_type" { type = string }

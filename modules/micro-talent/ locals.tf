@@ -24,6 +24,9 @@ locals {
     cidrsubnet(var.vpc_cidr, 5, 5),
   ]
 
+  # Usar la imagen del ECR con tag latest para la PoC
+  image_uri = var.docker_image
+
   user_data = base64encode(<<-EOT
   #!/bin/bash
   set -euxo pipefail
@@ -39,25 +42,23 @@ locals {
     sleep 2
   done
 
-  # Deriva el registry a partir de la imagen completa que viene de TF
-  REGISTRY_DOMAIN=$(echo ${var.docker_image} | cut -d'/' -f1)
+  # Registry a partir de la imagen (usar $$ para que lo resuelva bash, no Terraform)
+  IMAGE_URI="${local.image_uri}"
+  REGISTRY_DOMAIN="$(echo "$IMAGE_URI" | cut -d'/' -f1 || true)"
 
-  # Login a ECR con reintentos (la instancia puede tardar en tener red/IMDS listo)
-  for i in {1..6}; do
-    if aws ecr get-login-password --region ${var.region} | docker login --username AWS --password-stdin $${REGISTRY_DOMAIN}; then
-      echo "[ecr] login OK"
-      break
-    fi
-    echo "[ecr] reintentando login ($i/6)…"
-    sleep 5
-  done
+  # Login a ECR SOLO si el registry es de AWS
+  if echo "$REGISTRY_DOMAIN" | grep -q 'amazonaws.com'; then
+    for i in {1..6}; do
+      if aws ecr get-login-password --region ${var.region} | docker login --username AWS --password-stdin "$REGISTRY_DOMAIN"; then
+        echo "[ecr] login OK"; break
+      fi
+      echo "[ecr] reintentando login ($i/6)…"; sleep 5
+    done
+  fi
 
   # Pull con reintentos
   for i in {1..3}; do
-    docker pull "${var.docker_image}" && break || {
-      echo "[docker] retry pull ($i/3)…"
-      sleep 3
-    }
+    docker pull "$IMAGE_URI" && break || { echo "[docker] retry pull ($i/3)…"; sleep 3; }
   done
 
   # Idempotencia del contenedor
@@ -72,19 +73,17 @@ locals {
     -e DB_NAME='${var.db_name}' \
     -e DB_USER='${var.db_username}' \
     -e DB_PASSWORD='${var.db_password}' \
-    "${var.docker_image}"
+    "$IMAGE_URI"
 
-  # Healthcheck simple: esperar hasta 2 min a que Apache conteste localmente
+  # Healthcheck: esperar hasta 2 min a que Apache conteste localmente
   for i in {1..24}; do
     if curl -sS --max-time 2 http://127.0.0.1/ >/dev/null; then
-      echo "[health] Apache OK"
-      break
+      echo "[health] Apache OK"; break
     fi
-    echo "[health] esperando Apache ($i/24)…"
-    sleep 5
+    echo "[health] esperando Apache ($i/24)…"; sleep 5
   done
 
   echo "[done] bootstrap completado"
-EOT
+  EOT
   )
 }

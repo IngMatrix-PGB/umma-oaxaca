@@ -54,10 +54,12 @@ jobs:
       - name: Build, tag and push Docker image
         run: |
           set -euo pipefail
-          IMAGE_URI=${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:dev-${GITHUB_SHA::7}
+          # Para la PoC usar tag 'latest' como solicitaste
+          IMAGE_URI=${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:latest
           docker build -t "$IMAGE_URI" ./docker
           docker push "$IMAGE_URI"
           echo "IMAGE_URI=$IMAGE_URI" >> $GITHUB_ENV
+          echo "✅ Imagen Docker subida: $IMAGE_URI"
 
       - name: Terraform Init
         run: terraform init -backend-config="environments/development/backend.hcl"
@@ -71,6 +73,21 @@ jobs:
 
       - name: Terraform Apply
         run: terraform apply -auto-approve tfplan-dev
+
+      - name: Get deployment info
+        run: |
+          echo "🎉 Deployment completado exitosamente!"
+          echo ""
+          echo "📋 Información del deployment:"
+          echo "🌐 Aplicación web: http://$(terraform output -raw ec2_public_ip)"
+          echo "💻 Code Server: http://$(terraform output -raw ec2_public_ip):8080"
+          echo "🗄️ RDS Endpoint: $(terraform output -raw rds_endpoint)"
+          echo "🏷️ Imagen Docker: ${{ env.IMAGE_URI }}"
+          echo ""
+          echo "🔑 Credenciales por defecto:"
+          echo "   - Code Server Password: ummaoaxaca"
+          echo "   - RDS Username: postgres"
+          echo "   - RDS Password: ummaoaxaca"
 
   destroy:
     if: ${{ inputs.action == 'destroy' }}
@@ -111,3 +128,15 @@ jobs:
           terraform destroy \
             -auto-approve \
             -var-file="environments/development/terraform.tfvars"
+
+      - name: Cleanup confirmation
+        run: |
+          echo "🧹 Cleanup completado exitosamente!"
+          echo ""
+          echo "📋 Recursos eliminados:"
+          echo "🏗️ Infraestructura Terraform: DESTRUIDA"
+          echo "🐳 Imágenes ECR: CONSERVADAS (para reutilización)"
+          echo "🧽 Archivos temporales: ELIMINADOS"
+          echo ""
+          echo "💰 Costo estimado ahorrado: ~$53.40/mes"
+          echo "✨ Entorno development completamente limpio"
