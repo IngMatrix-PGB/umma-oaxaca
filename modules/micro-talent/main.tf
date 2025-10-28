@@ -2,32 +2,38 @@ module "vpc" {
   source  = "terraform-aws-modules/vpc/aws"
   version = "~> 5.9"
 
-  name               = "${local.base_name}-vpc"
-  cidr               = var.vpc_cidr
-  azs                = ["us-east-1a", "us-east-1b", "us-east-1c"]
-  public_subnets     = local.public_subnets
-  private_subnets    = local.private_subnets
-  enable_flow_log    = false
+  name            = "${local.base_name}-vpc"
+  cidr            = var.vpc_cidr
+  azs             = ["us-east-1a", "us-east-1b", "us-east-1c"]
+  public_subnets  = local.public_subnets
+  private_subnets = local.private_subnets
+
   enable_nat_gateway = true
   single_nat_gateway = true
 
-  # ACL explícita para públicas (ALLOW ALL) – evita timeouts por NACL
+  # Asegura salida a Internet y IPs públicas en public subnets
+  create_igw              = true
+  map_public_ip_on_launch = true
+
+  # 🔓 NACL explícita para públicas (ALLOW ALL)
   public_dedicated_network_acl = true
+
   public_inbound_acl_rules = [
     {
       rule_number = 100
       protocol    = "-1"
-      action      = "allow"
+      rule_action = "allow"   # <- esta es la clave correcta
       cidr_block  = "0.0.0.0/0"
       from_port   = 0
       to_port     = 0
     }
   ]
+
   public_outbound_acl_rules = [
     {
       rule_number = 100
       protocol    = "-1"
-      action      = "allow"
+      rule_action = "allow"
       cidr_block  = "0.0.0.0/0"
       from_port   = 0
       to_port     = 0
