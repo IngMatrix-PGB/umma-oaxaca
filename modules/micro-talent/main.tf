@@ -10,6 +10,29 @@ module "vpc" {
   enable_flow_log    = false
   enable_nat_gateway = true
   single_nat_gateway = true
+
+  # ACL explícita para públicas (ALLOW ALL) – evita timeouts por NACL
+  public_dedicated_network_acl = true
+  public_inbound_acl_rules = [
+    {
+      rule_number = 100
+      protocol    = "-1"
+      action      = "allow"
+      cidr_block  = "0.0.0.0/0"
+      from_port   = 0
+      to_port     = 0
+    }
+  ]
+  public_outbound_acl_rules = [
+    {
+      rule_number = 100
+      protocol    = "-1"
+      action      = "allow"
+      cidr_block  = "0.0.0.0/0"
+      from_port   = 0
+      to_port     = 0
+    }
+  ]
 }
 module "ec2_sg" {
   source  = "terraform-aws-modules/security-group/aws"
@@ -103,7 +126,7 @@ module "ec2" {
   enable_volume_tags          = true
 
   #  Garantiza que cloud-init pueda usar IMDS y ejecute user_data
-    metadata_options = {
+  metadata_options = {
     http_endpoint               = "enabled"
     http_tokens                 = "optional"
     http_put_response_hop_limit = 2
@@ -118,7 +141,7 @@ module "ecr" {
   repository_image_scan_on_push = true
   repository_force_delete       = true
   create_lifecycle_policy       = true
-  repository_lifecycle_policy   = jsonencode({
+  repository_lifecycle_policy = jsonencode({
     rules = [{
       rulePriority = 1,
       description  = "keep last 10",
