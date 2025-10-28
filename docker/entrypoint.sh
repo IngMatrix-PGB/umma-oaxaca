@@ -2,32 +2,37 @@
 set -euo pipefail
 
 : "${CODE_SERVER_PASSWORD:=changeme}"
-DB_HOST="${DB_HOST:-}"
-DB_PORT="${DB_PORT:-5432}"
-DB_NAME="${DB_NAME:-}"
-DB_USER="${DB_USER:-}"
-DB_PASSWORD="${DB_PASSWORD:-}"
+: "${DB_HOST:=}"
+: "${DB_PORT:=5432}"
+: "${DB_NAME:=}"
+: "${DB_USER:=}"
+: "${DB_PASSWORD:=}"
 
 export HOME=/root
 
+# Arranca Apache
 service apache2 start
 
-mkdir -p /root/.local/share/code-server
+# Configuración de code-server (sin usar --password)
+mkdir -p /root/.config/code-server /root/.local/share/code-server
+cat >/root/.config/code-server/config.yaml <<EOF
+bind-addr: 0.0.0.0:8080
+auth: password
+password: ${CODE_SERVER_PASSWORD}
+cert: false
+EOF
+
 (
   while true; do
     echo "[code-server] starting..."
-    code-server \
-      --bind-addr 0.0.0.0:8080 \
-      --auth password \
-      --password "${CODE_SERVER_PASSWORD}" \
-      --user-data-dir /root/.local/share/code-server \
-      --disable-telemetry
-    echo "[code-server] exited ($?), retrying in 2s..."
+    code-server --user-data-dir /root/.local/share/code-server --disable-telemetry
+    rc=$?
+    echo "[code-server] exited (${rc}), retrying in 2s..."
     sleep 2
   done
 ) >>/var/log/code-server.log 2>&1 &
 
-# Chequeo opcional a RDS
+# Chequeo opcional de RDS
 if [[ -n "$DB_HOST" && -n "$DB_NAME" && -n "$DB_USER" && -n "$DB_PASSWORD" ]]; then
   echo "[rds-check] Probar conexión a ${DB_HOST}:${DB_PORT}/${DB_NAME}"
   if PGPASSWORD="$DB_PASSWORD" \

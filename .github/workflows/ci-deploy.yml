@@ -20,7 +20,6 @@ env:
   AWS_REGION: ${{ secrets.AWS_REGION }}
   AWS_ACCOUNT_ID: ${{ secrets.AWS_ACCOUNT_ID }}
   ECR_REPOSITORY: ${{ secrets.ECR_REPOSITORY }}
-  # Opcional, endurece TF en CI
   TF_IN_AUTOMATION: "1"
   TF_INPUT: "0"
 
@@ -32,7 +31,6 @@ jobs:
   deploy:
     if: ${{ github.event_name == 'push' || inputs.action == 'deploy' }}
     runs-on: ubuntu-latest
-
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -63,14 +61,27 @@ jobs:
       - name: Terraform Init
         run: terraform init -backend-config="environments/development/backend.hcl"
 
-      # Evita 'RepositoryAlreadyExistsException' al plan/apply
+      # 🔧 Import robusto: prueba índice [0] y clave ["repo"]
       - name: Terraform import ECR if exists
         run: |
           set -euo pipefail
-          if aws ecr describe-repositories --region "$AWS_REGION" --repository-names "$ECR_REPOSITORY" >/dev/null 2>&1; then
-            terraform import -no-color 'module.micro_talent.module.ecr.aws_ecr_repository.this[0]' "$ECR_REPOSITORY" || true
-            terraform import -no-color 'module.micro_talent.module.ecr.aws_ecr_repository_policy.this[0]' "$ECR_REPOSITORY" || true
-            terraform import -no-color 'module.micro_talent.module.ecr.aws_ecr_lifecycle_policy.this[0]' "$ECR_REPOSITORY" || true
+          REPO="${ECR_REPOSITORY}"
+          if aws ecr describe-repositories --region "$AWS_REGION" --repository-names "$REPO" >/dev/null 2>&1; then
+            echo "ECR '$REPO' existe. Importando a Terraform…"
+
+            # Repo
+            terraform import -no-color 'module.micro_talent.module.ecr.aws_ecr_repository.this[0]' "$REPO" || \
+            terraform import -no-color "module.micro_talent.module.ecr.aws_ecr_repository.this[\"$REPO\"]" "$REPO" || true
+
+            # Repo policy (si el módulo la crea)
+            terraform import -no-color 'module.micro_talent.module.ecr.aws_ecr_repository_policy.this[0]' "$REPO" || \
+            terraform import -no-color "module.micro_talent.module.ecr.aws_ecr_repository_policy.this[\"$REPO\"]" "$REPO" || true
+
+            # Lifecycle policy (si el módulo la crea)
+            terraform import -no-color 'module.micro_talent.module.ecr.aws_ecr_lifecycle_policy.this[0]' "$REPO" || \
+            terraform import -no-color "module.micro_talent.module.ecr.aws_ecr_lifecycle_policy.this[\"$REPO\"]" "$REPO" || true
+          else
+            echo "ECR '$REPO' no existe. Terraform lo creará."
           fi
 
       - name: Terraform Plan
@@ -86,8 +97,6 @@ jobs:
   destroy:
     if: ${{ inputs.action == 'destroy' }}
     runs-on: ubuntu-latest
-    # Opción A (recomendada): protege con un Environment y reviewers en Settings > Environments
-    # environment: development
 
     steps:
       - name: Checkout
@@ -104,13 +113,13 @@ jobs:
           role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
           aws-region: ${{ env.AWS_REGION }}
 
-      # Opción B: Aprobación manual dentro del job (si no usas Environments)
+      # (opcional) En lugar de este paso, protege con Environments en Settings.
       - name: Manual approval
         if: ${{ env.USE_INLINE_APPROVAL == '1' }}
         uses: trstringer/manual-approval@v1
         with:
           secret: ${{ github.TOKEN }}
-          approvers: ${{ secrets.APPROVERS }} # ej. "IngMatrix-PGB,otro-user"
+          approvers: ${{ secrets.APPROVERS }}
           minimum-approvals: 1
           issue-title: "Approve terraform destroy"
           issue-body: "Confirma para ejecutar terraform destroy en development"
