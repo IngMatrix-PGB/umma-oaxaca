@@ -45,15 +45,9 @@ module "ec2_sg" {
   ingress_with_cidr_blocks = concat(
     [
       { rule = "http-80-tcp", description = "HTTP public", cidr_blocks = "0.0.0.0/0" },
-
-      { from_port = 8080, to_port = 8080, protocol = "tcp",
-      description = "code-server public", cidr_blocks = "0.0.0.0/0" }
+      { from_port = 8080, to_port = 8080, protocol = "tcp", description = "code-server public", cidr_blocks = "0.0.0.0/0" }
     ],
-    [for c in var.allowed_ssh_cidrs : {
-      rule        = "ssh-tcp"
-      description = "SSH restricted"
-      cidr_blocks = c
-    }]
+    [for c in var.allowed_ssh_cidrs : { rule = "ssh-tcp", description = "SSH restricted", cidr_blocks = c }]
   )
 
   egress_rules = ["all-all"]
