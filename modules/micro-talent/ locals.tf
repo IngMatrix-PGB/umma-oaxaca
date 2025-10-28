@@ -24,7 +24,7 @@ locals {
     cidrsubnet(var.vpc_cidr, 5, 5),
   ]
 
-    user_data = base64encode(<<-EOT
+  user_data = base64encode(<<-EOT
   #!/bin/bash
   set -euxo pipefail
 

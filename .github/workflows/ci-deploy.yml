@@ -31,6 +31,7 @@ jobs:
   deploy:
     if: ${{ github.event_name == 'push' || inputs.action == 'deploy' }}
     runs-on: ubuntu-latest
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -61,29 +62,6 @@ jobs:
       - name: Terraform Init
         run: terraform init -backend-config="environments/development/backend.hcl"
 
-      # 🔧 Import robusto: prueba índice [0] y clave ["repo"]
-      - name: Terraform import ECR if exists
-        run: |
-          set -euo pipefail
-          REPO="${ECR_REPOSITORY}"
-          if aws ecr describe-repositories --region "$AWS_REGION" --repository-names "$REPO" >/dev/null 2>&1; then
-            echo "ECR '$REPO' existe. Importando a Terraform…"
-
-            # Repo
-            terraform import -no-color 'module.micro_talent.module.ecr.aws_ecr_repository.this[0]' "$REPO" || \
-            terraform import -no-color "module.micro_talent.module.ecr.aws_ecr_repository.this[\"$REPO\"]" "$REPO" || true
-
-            # Repo policy (si el módulo la crea)
-            terraform import -no-color 'module.micro_talent.module.ecr.aws_ecr_repository_policy.this[0]' "$REPO" || \
-            terraform import -no-color "module.micro_talent.module.ecr.aws_ecr_repository_policy.this[\"$REPO\"]" "$REPO" || true
-
-            # Lifecycle policy (si el módulo la crea)
-            terraform import -no-color 'module.micro_talent.module.ecr.aws_ecr_lifecycle_policy.this[0]' "$REPO" || \
-            terraform import -no-color "module.micro_talent.module.ecr.aws_ecr_lifecycle_policy.this[\"$REPO\"]" "$REPO" || true
-          else
-            echo "ECR '$REPO' no existe. Terraform lo creará."
-          fi
-
       - name: Terraform Plan
         run: |
           terraform plan \
@@ -97,6 +75,7 @@ jobs:
   destroy:
     if: ${{ inputs.action == 'destroy' }}
     runs-on: ubuntu-latest
+    # environment: development   # (opción recomendada con reviewers en Environments)
 
     steps:
       - name: Checkout
@@ -113,7 +92,7 @@ jobs:
           role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
           aws-region: ${{ env.AWS_REGION }}
 
-      # (opcional) En lugar de este paso, protege con Environments en Settings.
+      # Opcional: aprobación manual inline si no usas Environments
       - name: Manual approval
         if: ${{ env.USE_INLINE_APPROVAL == '1' }}
         uses: trstringer/manual-approval@v1
