@@ -12,6 +12,9 @@ db_username          = "postgres"
 db_password          = "supersecreto"
 code_server_password = "vscode-pass"
 
+name_prefix  = "overflow-dev"
+instance_type = "t3.micro"
+
 tags_common = {
   Project      = "overflow"
   Environment  = "development"
