@@ -1,23 +1,21 @@
-# Imagen base más ligera para PoC
-FROM httpd:2.4-alpine
+# Imagen base Debian para evitar problemas con el instalador de code-server
+FROM debian:bookworm-slim
 
-# Instalar dependencias mínimas necesarias
-RUN apk add --no-cache \
-    bash \
-    curl \
-    postgresql-client \
-    && rm -rf /var/cache/apk/*
+# Paquetes base
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl ca-certificates bash apache2 \
+ && rm -rf /var/lib/apt/lists/*
 
-# Instalar code-server para la demo
+# Instalar code-server con el instalador oficial (aquí sí funciona)
 RUN curl -fsSL https://code-server.dev/install.sh | sh
 
-# Copiar archivos de la aplicación
-COPY apache-hello-world/index.html /usr/local/apache2/htdocs/index.html
-COPY entrypoint.sh /usr/local/bin/entrypoint.sh
+# Archivos de tu app
+COPY docker/apache-hello-world/index.html /var/www/html/index.html
+COPY docker/entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN chmod +x /usr/local/bin/entrypoint.sh
 
-# Configurar Apache para mostrar archivos estáticos
-RUN echo "LoadModule rewrite_module modules/mod_rewrite.so" >> /usr/local/apache2/conf/httpd.conf
-
+# Exponer puertos: Apache (80) y code-server (8080)
 EXPOSE 80 8080
+
+# En Debian, Apache en foreground con apache2ctl
 CMD ["/usr/local/bin/entrypoint.sh"]

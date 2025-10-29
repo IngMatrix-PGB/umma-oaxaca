@@ -19,7 +19,7 @@ permissions:
 env:
   AWS_REGION: ${{ secrets.AWS_REGION }}
   AWS_ACCOUNT_ID: ${{ secrets.AWS_ACCOUNT_ID }}
-  ECR_REPOSITORY: ${{ secrets.ECR_REPOSITORY }}
+  ECR_REPOSITORY: ${{ secrets.ECR_REPOSITORY }} # ej: overflow-app
   TF_IN_AUTOMATION: "1"
   TF_INPUT: "0"
 
@@ -31,15 +31,9 @@ jobs:
   deploy:
     if: ${{ github.event_name == 'push' || inputs.action == 'deploy' }}
     runs-on: ubuntu-latest
-
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-
-      - name: Setup Terraform
-        uses: hashicorp/setup-terraform@v3
-        with:
-          terraform_version: 1.6.6
 
       - name: Configure AWS credentials (OIDC)
         uses: aws-actions/configure-aws-credentials@v4
@@ -47,61 +41,84 @@ jobs:
           role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
           aws-region: ${{ env.AWS_REGION }}
 
+      - name: Ensure ECR repository exists
+        run: |
+          aws ecr describe-repositories --repository-names "${ECR_REPOSITORY}" --region "${AWS_REGION}" >/dev/null 2>&1 \
+          || aws ecr create-repository --repository-name "${ECR_REPOSITORY}" --region "${AWS_REGION}" >/dev/null
+          echo "✅ ECR listo: ${ECR_REPOSITORY}"
+
+      - name: Setup Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
       - name: Login to Amazon ECR
-        id: login-ecr
         uses: aws-actions/amazon-ecr-login@v2
+        id: login-ecr
 
-      - name: Build, tag and push Docker image
+      - name: Build & push image (latest + sha)
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: ./docker
+          push: true
+          tags: |
+            ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:latest
+            ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - name: Export image URIs
         run: |
-          set -euo pipefail
-          # Para la PoC usar tag 'latest' como solicitaste
-          IMAGE_URI=${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:latest
-          docker build -t "$IMAGE_URI" ./docker
-          docker push "$IMAGE_URI"
-          echo "IMAGE_URI=$IMAGE_URI" >> $GITHUB_ENV
-          echo "✅ Imagen Docker subida: $IMAGE_URI"
+          echo "IMAGE_URI_LATEST=${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:latest" >> $GITHUB_ENV
+          echo "IMAGE_URI_SHA=${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ github.sha }}" >> $GITHUB_ENV
 
-      - name: Terraform Init
-        run: terraform init -backend-config="environments/development/backend.hcl"
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.6.6
 
-      - name: Terraform Plan
+      - name: Terraform Init (development)
+        run: terraform -chdir=environments/development init -backend-config="backend.hcl"
+
+      - name: Terraform Plan (pin to sha)
         run: |
-          terraform plan \
-            -var-file="environments/development/terraform.tfvars" \
-            -var "docker_image=${IMAGE_URI}" \
+          terraform -chdir=environments/development plan \
+            -input=false \
+            -var-file="terraform.tfvars" \
+            -var "docker_image=${IMAGE_URI_SHA}" \
             -out=tfplan-dev
+      - name: Upload plan artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: tfplan-dev
+          path: environments/development/tfplan-dev
 
       - name: Terraform Apply
-        run: terraform apply -auto-approve tfplan-dev
+        run: terraform -chdir=environments/development apply -input=false -auto-approve tfplan-dev
 
-      - name: Get deployment info
+      - name: Outputs & Summary
         run: |
-          echo "🎉 Deployment completado exitosamente!"
-          echo ""
-          echo "📋 Información del deployment:"
-          echo "🌐 Aplicación web: http://$(terraform output -raw ec2_public_ip)"
-          echo "💻 Code Server: http://$(terraform output -raw ec2_public_ip):8080"
-          echo "🗄️ RDS Endpoint: $(terraform output -raw rds_endpoint)"
-          echo "🏷️ Imagen Docker: ${{ env.IMAGE_URI }}"
-          echo ""
-          echo "🔑 Credenciales por defecto:"
-          echo "   - Code Server Password: ummaoaxaca"
-          echo "   - RDS Username: postgres"
-          echo "   - RDS Password: ummaoaxaca"
+          IP=$(terraform -chdir=environments/development output -raw ec2_public_ip || echo "N/A")
+          RDS=$(terraform -chdir=environments/development output -raw rds_endpoint || echo "N/A")
+          {
+            echo "## ✅ Deployment completado"
+            echo ""
+            echo "- Imagen (inmutable): \`${IMAGE_URI_SHA}\`"
+            echo "- Imagen (latest): \`${IMAGE_URI_LATEST}\`"
+            echo "- Web: http://${IP}"
+            echo "- Code Server: http://${IP}:8080"
+            echo "- RDS: \`${RDS}\`"
+            echo ""
+            echo "> Credenciales por defecto (ajústalas con secrets en el runtime):"
+            echo "- Code Server Password: \`(usar secret CODE_SERVER_PASSWORD)\`"
+            echo "- RDS Username: \`postgres\`"
+            echo "- RDS Password: \`(usar secret)\`"
+          } >> "$GITHUB_STEP_SUMMARY"
 
   destroy:
     if: ${{ inputs.action == 'destroy' }}
     runs-on: ubuntu-latest
-    # environment: development   # (opción recomendada con reviewers en Environments)
-
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-
-      - name: Setup Terraform
-        uses: hashicorp/setup-terraform@v3
-        with:
-          terraform_version: 1.6.6
 
       - name: Configure AWS credentials (OIDC)
         uses: aws-actions/configure-aws-credentials@v4
@@ -109,34 +126,27 @@ jobs:
           role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
           aws-region: ${{ env.AWS_REGION }}
 
-      # Opcional: aprobación manual inline si no usas Environments
-      - name: Manual approval
-        if: ${{ env.USE_INLINE_APPROVAL == '1' }}
-        uses: trstringer/manual-approval@v1
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
         with:
-          secret: ${{ github.TOKEN }}
-          approvers: ${{ secrets.APPROVERS }}
-          minimum-approvals: 1
-          issue-title: "Approve terraform destroy"
-          issue-body: "Confirma para ejecutar terraform destroy en development"
+          terraform_version: 1.6.6
 
-      - name: Terraform Init
-        run: terraform init -backend-config="environments/development/backend.hcl"
+      - name: Terraform Init (development)
+        run: terraform -chdir=environments/development init -backend-config="backend.hcl"
 
       - name: Terraform Destroy
         run: |
-          terraform destroy \
+          terraform -chdir=environments/development destroy \
             -auto-approve \
-            -var-file="environments/development/terraform.tfvars"
+            -input=false \
+            -var-file="terraform.tfvars"
 
-      - name: Cleanup confirmation
+      - name: Cleanup Summary
         run: |
-          echo "🧹 Cleanup completado exitosamente!"
-          echo ""
-          echo "📋 Recursos eliminados:"
-          echo "🏗️ Infraestructura Terraform: DESTRUIDA"
-          echo "🐳 Imágenes ECR: CONSERVADAS (para reutilización)"
-          echo "🧽 Archivos temporales: ELIMINADOS"
-          echo ""
-          echo "💰 Costo estimado ahorrado: ~$53.40/mes"
-          echo "✨ Entorno development completamente limpio"
+          {
+            echo "## 🧹 Cleanup completado"
+            echo ""
+            echo "- Infraestructura Terraform: **DESTRUIDA**"
+            echo "- Imágenes ECR: **CONSERVADAS** (reutilizables)"
+            echo "- Costos ahorrados estimados: ~\$53.40/mes"
+          } >> "$GITHUB_STEP_SUMMARY"

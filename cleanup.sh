@@ -1,148 +1,108 @@
-#!/bin/bash
-
-# Script de cleanup para AWS User Group Oaxaca PoC
-# Autor: Pablo Galeana
-# Descripción: Limpia todos los recursos creados durante la demo
-
+#!/usr/bin/env bash
 set -euo pipefail
 
-# Colores para output
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-BLUE='\033[0;34m'
-NC='\033[0m' # No Color
+# ---- Config mínima (personaliza si quieres) ----
+ENVIRONMENT="${1:-development}"     # development|staging|production
+REGION="${REGION:-us-east-1}"
+TF_BACKEND_FILE="${TF_BACKEND_FILE:-environments/${ENVIRONMENT}/backend.hcl}"
+TF_VARS_FILE="${TF_VARS_FILE:-environments/${ENVIRONMENT}/terraform.tfvars}"
+ECR_REPO_NAME="${ECR_REPO_NAME:-overflow-app}"  # Debe coincidir con el que uses en CI/Terraform
 
-# Función para logging
-log() {
-    echo -e "${BLUE}[$(date '+%Y-%m-%d %H:%M:%S')]${NC} $*"
-}
+# ---- Helpers simples (sin colores para menos ruido) ----
+log()    { echo "[INFO]  $*"; }
+warn()   { echo "[WARN]  $*"; }
+error()  { echo "[ERROR] $*" >&2; }
+confirm(){ read -r -p "$1 (yes/no): " ans; [[ "$ans" == "yes" ]]; }
 
-error() {
-    echo -e "${RED}[ERROR]${NC} $*" >&2
-}
-
-success() {
-    echo -e "${GREEN}[SUCCESS]${NC} $*"
-}
-
-warning() {
-    echo -e "${YELLOW}[WARNING]${NC} $*"
-}
-
-# Variables de configuración
-ENVIRONMENT="${1:-development}"
-REGION="us-east-1"
-
-# Validar argumentos
-if [[ $# -eq 0 ]]; then
-    echo "Uso: $0 <environment>"
-    echo "Entornos disponibles: development, staging, production"
-    exit 1
-fi
-
+# ---- Validaciones ----
 if [[ ! "$ENVIRONMENT" =~ ^(development|staging|production)$ ]]; then
-    error "Entorno '$ENVIRONMENT' no válido. Use: development, staging, o production"
-    exit 1
+  error "Entorno no válido: $ENVIRONMENT"
+  exit 1
 fi
 
-log "🧹 Iniciando cleanup para AWS User Group Oaxaca PoC"
-log "📋 Entorno: $ENVIRONMENT"
+command -v aws >/dev/null || { error "AWS CLI no instalado"; exit 1; }
+command -v terraform >/dev/null || { error "Terraform no instalado"; exit 1; }
 
-# Verificar dependencias
-log "🔍 Verificando dependencias..."
-command -v aws >/dev/null 2>&1 || { error "AWS CLI no está instalado"; exit 1; }
-command -v terraform >/dev/null 2>&1 || { error "Terraform no está instalado"; exit 1; }
+log "Autenticando contra AWS..."
+aws sts get-caller-identity >/dev/null || { error "Credenciales AWS inválidas"; exit 1; }
+ACCOUNT_ID="$(aws sts get-caller-identity --query Account --output text)"
+log "Cuenta: $ACCOUNT_ID  Región: $REGION  Entorno: $ENVIRONMENT"
 
-# Verificar configuración AWS
-log "🔐 Verificando configuración AWS..."
-if ! aws sts get-caller-identity >/dev/null 2>&1; then
-    error "No se puede autenticar con AWS. Configure sus credenciales."
-    exit 1
+warn "Esto destruirá TODOS los recursos de Terraform del entorno '$ENVIRONMENT'."
+warn "Incluye EC2, RDS, VPC, SGs, etc. También eliminará imágenes y repo ECR '$ECR_REPO_NAME'."
+confirm "¿Deseas continuar?" || { log "Cancelado."; exit 0; }
+
+# ---- Terraform destroy ----
+ENV_DIR="environments/${ENVIRONMENT}"
+[[ -d "$ENV_DIR" ]] || { error "No existe $ENV_DIR"; exit 1; }
+
+pushd "$ENV_DIR" >/dev/null
+
+log "Inicializando Terraform..."
+if [[ -f "../${TF_BACKEND_FILE##*/}" ]]; then
+  # Si llamas desde environments/$ENVIRONMENT, soporta backend en ../backend.hcl
+  terraform init -backend-config="../${TF_BACKEND_FILE##*/}"
+elif [[ -f "../../${TF_BACKEND_FILE}" ]]; then
+  terraform init -backend-config="../../${TF_BACKEND_FILE}"
+else
+  # Sin backend explícito: init simple (local state)
+  terraform init
 fi
 
-ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
-log "✅ Autenticado en AWS Account: $ACCOUNT_ID"
-
-# Confirmar antes de destruir
-warning "⚠️  ADVERTENCIA: Esto destruirá TODOS los recursos del entorno '$ENVIRONMENT'"
-warning "⚠️  Esto incluye: EC2, RDS, VPC, ECR, Security Groups, etc."
-echo ""
-read -p "¿Estás seguro de que quieres continuar? (escribe 'yes' para confirmar): " CONFIRM
-
-if [[ "$CONFIRM" != "yes" ]]; then
-    log "❌ Operación cancelada por el usuario"
-    exit 0
+log "Destruyendo infraestructura..."
+if [[ -f "../${TF_VARS_FILE##*/}" ]]; then
+  terraform destroy -auto-approve -var-file="../${TF_VARS_FILE##*/}"
+elif [[ -f "../../${TF_VARS_FILE}" ]]; then
+  terraform destroy -auto-approve -var-file="../../${TF_VARS_FILE}"
+else
+  terraform destroy -auto-approve
 fi
 
-# Cambiar al directorio del entorno
-ENVIRONMENT_DIR="environments/$ENVIRONMENT"
-if [[ ! -d "$ENVIRONMENT_DIR" ]]; then
-    error "Directorio de entorno '$ENVIRONMENT_DIR' no encontrado"
-    exit 1
-fi
+popd >/dev/null
+log "Infra destruida."
 
-cd "$ENVIRONMENT_DIR"
-
-# Destruir infraestructura con Terraform
-log "🏗️ Destruyendo infraestructura con Terraform..."
-if ! terraform destroy -auto-approve; then
-    error "Falló la destrucción de la infraestructura"
-    exit 1
-fi
-
-success "✅ Infraestructura destruida exitosamente"
-
-# Limpiar imágenes del ECR (opcional)
-log "🐳 Limpiando imágenes del ECR..."
-ECR_REPO_NAME="overflow-app"
+# ---- ECR cleanup con paginación ----
 ECR_REGISTRY="${ACCOUNT_ID}.dkr.ecr.${REGION}.amazonaws.com"
 
-# Verificar si el repositorio existe
-if aws ecr describe-repositories --repository-names "$ECR_REPO_NAME" --region "$REGION" >/dev/null 2>&1; then
-    log "🗑️ Eliminando imágenes del repositorio ECR..."
-    
-    # Listar y eliminar todas las imágenes
-    IMAGE_IDS=$(aws ecr list-images --repository-name "$ECR_REPO_NAME" --region "$REGION" --query 'imageIds[*]' --output json 2>/dev/null || echo "[]")
-    
-    if [[ "$IMAGE_IDS" != "[]" ]]; then
-        aws ecr batch-delete-image --repository-name "$ECR_REPO_NAME" --image-ids "$IMAGE_IDS" --region "$REGION" >/dev/null 2>&1 || true
-        success "✅ Imágenes del ECR eliminadas"
+repo_exists() {
+  aws ecr describe-repositories --repository-names "$ECR_REPO_NAME" --region "$REGION" >/dev/null 2>&1
+}
+
+if repo_exists; then
+  log "Eliminando imágenes de ECR ($ECR_REPO_NAME)..."
+  # Paginar list-images (1000 por página como máximo)
+  NEXT_TOKEN=""
+  while :; do
+    if [[ -z "$NEXT_TOKEN" ]]; then
+      PAGE=$(aws ecr list-images --repository-name "$ECR_REPO_NAME" --region "$REGION" \
+              --query 'imageIds' --output json)
     else
-        log "ℹ️ No hay imágenes en el repositorio ECR"
+      PAGE=$(aws ecr list-images --repository-name "$ECR_REPO_NAME" --region "$REGION" \
+              --query 'imageIds' --output json --starting-token "$NEXT_TOKEN")
     fi
-    
-    # Eliminar el repositorio ECR
-    log "🗑️ Eliminando repositorio ECR..."
-    aws ecr delete-repository --repository-name "$ECR_REPO_NAME" --region "$REGION" --force >/dev/null 2>&1 || true
-    success "✅ Repositorio ECR eliminado"
+
+    if [[ "$PAGE" != "[]" ]]; then
+      aws ecr batch-delete-image --repository-name "$ECR_REPO_NAME" \
+         --image-ids "$PAGE" --region "$REGION" >/dev/null || true
+      log "Página de imágenes eliminada."
+    fi
+
+    # obtener next token
+    RAW=$(aws ecr list-images --repository-name "$ECR_REPO_NAME" --region "$REGION" --output json || echo "{}")
+    NEXT_TOKEN=$(printf '%s' "$RAW" | grep -o '"nextToken":[^,}]*' | cut -d: -f2- | tr -d ' "')
+    [[ -z "$NEXT_TOKEN" ]] && break
+  done
+
+  log "Eliminando repositorio ECR..."
+  aws ecr delete-repository --repository-name "$ECR_REPO_NAME" --region "$REGION" --force >/dev/null || true
+  log "ECR limpiado."
 else
-    log "ℹ️ Repositorio ECR no encontrado o ya eliminado"
+  log "Repositorio ECR '$ECR_REPO_NAME' no existe o ya fue eliminado."
 fi
 
-# Limpiar archivos temporales
-log "🧽 Limpiando archivos temporales..."
-rm -f tfplan
-rm -rf .terraform/
-rm -f .terraform.lock.hcl
+# ---- Limpieza de archivos locales de Terraform (si quedaron) ----
+log "Limpiando artefactos locales..."
+rm -rf "${ENV_DIR}/.terraform" "${ENV_DIR}/.terraform.lock.hcl" "${ENV_DIR}/tfplan" 2>/dev/null || true
+log "Listo."
 
-success "✅ Archivos temporales eliminados"
-
-log "🎉 Cleanup completado exitosamente!"
-log ""
-log "📋 Resumen del cleanup:"
-log "   🏗️ Infraestructura Terraform: DESTRUIDA"
-log "   🐳 Repositorio ECR: ELIMINADO"
-log "   🧽 Archivos temporales: LIMPIADOS"
-log ""
-success "✨ Entorno '$ENVIRONMENT' completamente limpio"
-
-# Mostrar costo estimado ahorrado
-log ""
-log "💰 Costo estimado ahorrado:"
-log "   - EC2 t3.micro: ~$8.50/mes"
-log "   - RDS db.t4g.micro: ~$12.50/mes"
-log "   - NAT Gateway: ~$32.40/mes"
-log "   - Total estimado: ~$53.40/mes"
-log ""
-success "🎊 ¡Demo completada y recursos liberados!"
+log "Cleanup completado ✅"

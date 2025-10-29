@@ -1,162 +1,99 @@
-#!/bin/bash
-
-# Script de deployment para AWS User Group Oaxaca PoC
-# Autor: Pablo Galeana
-# Descripción: Build, push y deploy automatizado con tag 'latest'
-
+#!/usr/bin/env bash
 set -euo pipefail
 
-# Colores para output
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-BLUE='\033[0;34m'
-NC='\033[0m' # No Color
+# ---- Config ----
+PROJECT_NAME="${PROJECT_NAME:-overflow}"
+ENVIRONMENT="${1:-development}"               # development|staging|production
+REGION="${REGION:-us-east-1}"
+IMAGE_TAG="${IMAGE_TAG:-latest}"
+DOCKER_DIR="${DOCKER_DIR:-./docker}"
 
-# Función para logging
-log() {
-    echo -e "${BLUE}[$(date '+%Y-%m-%d %H:%M:%S')]${NC} $*"
-}
+TF_BACKEND_FILE="${TF_BACKEND_FILE:-environments/${ENVIRONMENT}/backend.hcl}"
+TF_VARS_FILE="${TF_VARS_FILE:-environments/${ENVIRONMENT}/terraform.tfvars}"
+TF_PARALLELISM="${TF_PARALLELISM:-10}"
 
-error() {
-    echo -e "${RED}[ERROR]${NC} $*" >&2
-}
+# Repo ECR (coherente con cleanup)
+ECR_REPO_NAME="${ECR_REPO_NAME:-${PROJECT_NAME}-app}"
 
-success() {
-    echo -e "${GREEN}[SUCCESS]${NC} $*"
-}
+# ---- Helpers ----
+log()   { echo "[INFO]  $*"; }
+error() { echo "[ERROR] $*" >&2; }
 
-warning() {
-    echo -e "${YELLOW}[WARNING]${NC} $*"
-}
-
-# Variables de configuración
-PROJECT_NAME="overflow"
-ENVIRONMENT="${1:-development}"
-REGION="us-east-1"
-IMAGE_TAG="latest"
-DOCKERFILE_PATH="./docker"
-
-# Validar argumentos
-if [[ $# -eq 0 ]]; then
-    echo "Uso: $0 <environment>"
-    echo "Entornos disponibles: development, staging, production"
-    exit 1
-fi
-
+# ---- Validaciones ----
 if [[ ! "$ENVIRONMENT" =~ ^(development|staging|production)$ ]]; then
-    error "Entorno '$ENVIRONMENT' no válido. Use: development, staging, o production"
-    exit 1
+  error "Entorno no válido: $ENVIRONMENT"
+  exit 1
 fi
 
-log " Iniciando deployment para AWS User Group Oaxaca PoC"
-log " Configuración:"
-log "   - Proyecto: $PROJECT_NAME"
-log "   - Entorno: $ENVIRONMENT"
-log "   - Región: $REGION"
-log "   - Tag de imagen: $IMAGE_TAG"
+command -v docker >/dev/null   || { error "Docker no instalado"; exit 1; }
+command -v aws >/dev/null      || { error "AWS CLI no instalado"; exit 1; }
+command -v terraform >/dev/null|| { error "Terraform no instalado"; exit 1; }
 
-# Verificar dependencias
-log " Verificando dependencias..."
-command -v docker >/dev/null 2>&1 || { error "Docker no está instalado"; exit 1; }
-command -v aws >/dev/null 2>&1 || { error "AWS CLI no está instalado"; exit 1; }
-command -v terraform >/dev/null 2>&1 || { error "Terraform no está instalado"; exit 1; }
-
-# Verificar configuración AWS
-log " Verificando configuración AWS..."
-if ! aws sts get-caller-identity >/dev/null 2>&1; then
-    error "No se puede autenticar con AWS. Configure sus credenciales."
-    exit 1
-fi
-
-ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
-log " Autenticado en AWS Account: $ACCOUNT_ID"
-
-# Obtener información del ECR
-ECR_REPO_NAME="${PROJECT_NAME}-app"
+aws sts get-caller-identity >/dev/null || { error "Credenciales AWS inválidas"; exit 1; }
+ACCOUNT_ID="$(aws sts get-caller-identity --query Account --output text)"
 ECR_REGISTRY="${ACCOUNT_ID}.dkr.ecr.${REGION}.amazonaws.com"
-ECR_URI="${ECR_REGISTRY}/${ECR_REPO_NAME}:${IMAGE_TAG}"
+IMAGE_URI="${ECR_REGISTRY}/${ECR_REPO_NAME}:${IMAGE_TAG}"
 
-log "📦 Registry ECR: $ECR_URI"
+log "Cuenta: $ACCOUNT_ID  Región: $REGION  Entorno: $ENVIRONMENT"
+log "ECR target: ${IMAGE_URI}"
 
-# Paso 1: Build de la imagen Docker
-log "🔨 Construyendo imagen Docker..."
-cd "$DOCKERFILE_PATH"
-
-if ! docker build -t "${PROJECT_NAME}-app:${IMAGE_TAG}" .; then
-    error "Falló la construcción de la imagen Docker"
-    exit 1
+# ---- Crear repo ECR si no existe ----
+if ! aws ecr describe-repositories --repository-names "$ECR_REPO_NAME" --region "$REGION" >/dev/null 2>&1; then
+  log "Creando repositorio ECR '$ECR_REPO_NAME'..."
+  aws ecr create-repository --repository-name "$ECR_REPO_NAME" --region "$REGION" >/dev/null
 fi
 
-success " Imagen Docker construida exitosamente"
+# ---- Login ECR ----
+log "Login ECR..."
+aws ecr get-login-password --region "$REGION" \
+  | docker login --username AWS --password-stdin "$ECR_REGISTRY" >/dev/null
 
-# Paso 2: Autenticación con ECR
-log " Autenticando con ECR..."
-if ! aws ecr get-login-password --region "$REGION" | docker login --username AWS --password-stdin "$ECR_REGISTRY"; then
-    error "Falló la autenticación con ECR"
-    exit 1
+# ---- Build & push ----
+log "Construyendo imagen..."
+pushd "$DOCKER_DIR" >/dev/null
+docker build -t "${PROJECT_NAME}-app:${IMAGE_TAG}" .
+docker tag   "${PROJECT_NAME}-app:${IMAGE_TAG}" "$IMAGE_URI"
+docker push  "$IMAGE_URI"
+popd >/dev/null
+log "Imagen publicada: $IMAGE_URI"
+
+# ---- Terraform apply ----
+ENV_DIR="environments/${ENVIRONMENT}"
+[[ -d "$ENV_DIR" ]] || { error "No existe ${ENV_DIR}"; exit 1; }
+
+pushd "$ENV_DIR" >/dev/null
+
+log "Inicializando Terraform..."
+if [[ -f "../${TF_BACKEND_FILE##*/}" ]]; then
+  terraform init -backend-config="../${TF_BACKEND_FILE##*/}"
+elif [[ -f "../../${TF_BACKEND_FILE}" ]]; then
+  terraform init -backend-config="../../${TF_BACKEND_FILE}"
+else
+  terraform init
 fi
 
-success " Autenticado con ECR"
-
-# Paso 3: Tag de la imagen para ECR
-log " Etiquetando imagen para ECR..."
-docker tag "${PROJECT_NAME}-app:${IMAGE_TAG}" "$ECR_URI"
-
-# Paso 4: Push de la imagen
-log " Subiendo imagen a ECR..."
-if ! docker push "$ECR_URI"; then
-    error "Falló el push de la imagen a ECR"
-    exit 1
+PLAN_ARGS=(-var "docker_image=${IMAGE_URI}")
+if [[ -f "../${TF_VARS_FILE##*/}" ]]; then
+  PLAN_ARGS+=(-var-file="../${TF_VARS_FILE##*/}")
+elif [[ -f "../../${TF_VARS_FILE}" ]]; then
+  PLAN_ARGS+=(-var-file="../../${TF_VARS_FILE}")
 fi
 
-success " Imagen subida exitosamente a ECR"
+log "Planificando..."
+terraform plan -parallelism="${TF_PARALLELISM}" "${PLAN_ARGS[@]}" -out=tfplan
 
-# Paso 5: Deploy con Terraform
-log "🏗️ Desplegando infraestructura con Terraform..."
-cd "../environments/$ENVIRONMENT"
+log "Aplicando..."
+terraform apply -parallelism="${TF_PARALLELISM}" -auto-approve tfplan
 
-# Inicializar Terraform si es necesario
-if [[ ! -d ".terraform" ]]; then
-    log "🔧 Inicializando Terraform..."
-    terraform init
-fi
+# ---- Outputs útiles ----
+EC2_PUBLIC_IP="$(terraform output -raw ec2_public_ip 2>/dev/null || true)"
+RDS_ENDPOINT="$(terraform output -raw rds_endpoint 2>/dev/null || true)"
 
-# Planificar cambios
-log " Planificando cambios..."
-if ! terraform plan -out=tfplan; then
-    error "Falló la planificación de Terraform"
-    exit 1
-fi
+log "Deployment OK ✅"
+[[ -n "$EC2_PUBLIC_IP" ]] && \
+  log "Web:        http://${EC2_PUBLIC_IP}" && \
+  log "code-server: http://${EC2_PUBLIC_IP}:8080"
+[[ -n "$RDS_ENDPOINT" ]] && log "RDS:        ${RDS_ENDPOINT}"
+log "Imagen:     ${IMAGE_URI}"
 
-# Aplicar cambios
-log " Aplicando cambios..."
-if ! terraform apply -auto-approve tfplan; then
-    error "Falló la aplicación de Terraform"
-    exit 1
-fi
-
-success " Infraestructura desplegada exitosamente"
-
-# Obtener información del deployment
-log " Obteniendo información del deployment..."
-EC2_PUBLIC_IP=$(terraform output -raw ec2_public_ip 2>/dev/null || echo "No disponible")
-RDS_ENDPOINT=$(terraform output -raw rds_endpoint 2>/dev/null || echo "No disponible")
-
-log " Deployment completado exitosamente!"
-log ""
-log " Información del deployment:"
-log "    Aplicación web: http://$EC2_PUBLIC_IP"
-log "    Code Server: http://$EC2_PUBLIC_IP:8080"
-log "    RDS Endpoint: $RDS_ENDPOINT"
-log "    Imagen Docker: $ECR_URI"
-log ""
-log " Credenciales por defecto:"
-log "   - Code Server Password: ummaoaxaca"
-log "   - RDS Username: postgres"
-log "   - RDS Password: ummaoaxaca"
-log ""
-success " ¡PoC lista para la conferencia AWS User Group Oaxaca!"
-
-# Limpiar archivos temporales
-rm -f tfplan
+popd >/dev/null
