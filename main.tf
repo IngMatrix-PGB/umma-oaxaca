@@ -1,28 +1,3 @@
-# AWS User Group Oaxaca - PoC Demo
-# Infrastructure as Code con Terraform
-# Autor: Pablo Galeana
-
-terraform {
-  required_version = ">= 1.0"
-
-  required_providers {
-    aws = {
-      source  = "hashicorp/aws"
-      version = "~> 5.0"
-    }
-  }
-}
-
-# Configuración del proveedor AWS
-provider "aws" {
-  region = var.region
-
-  default_tags {
-    tags = var.tags_common
-  }
-}
-
-# Módulo principal de micro-talent
 module "micro_talent" {
   source = "./modules/micro-talent"
 
