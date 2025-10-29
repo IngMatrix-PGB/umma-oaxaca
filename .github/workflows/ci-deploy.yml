@@ -77,13 +77,13 @@ jobs:
           terraform_version: 1.6.6
 
       - name: Terraform Init (development)
-        run: terraform -chdir=environments/development init -backend-config="backend.hcl"
+        run: terraform init -backend-config="environments/development/backend.hcl"
 
       - name: Terraform Plan (pin to sha)
         run: |
-          terraform -chdir=environments/development plan \
+          terraform plan \
             -input=false \
-            -var-file="terraform.tfvars" \
+            -var-file="environments/development/terraform.tfvars" \
             -var "docker_image=${IMAGE_URI_SHA}" \
             -out=tfplan-dev
 
@@ -91,15 +91,15 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: tfplan-dev
-          path: environments/development/tfplan-dev
+          path: tfplan-dev
 
       - name: Terraform Apply
-        run: terraform -chdir=environments/development apply -input=false -auto-approve tfplan-dev
+        run: terraform apply -input=false -auto-approve tfplan-dev
 
       - name: Outputs & Summary
         run: |
-          IP=$(terraform -chdir=environments/development output -raw ec2_public_ip || echo "N/A")
-          RDS=$(terraform -chdir=environments/development output -raw rds_endpoint || echo "N/A")
+          IP=$(terraform output -raw ec2_public_ip || echo "N/A")
+          RDS=$(terraform output -raw rds_endpoint || echo "N/A")
           {
             echo "## ✅ Deployment completado"
             echo ""
@@ -134,14 +134,14 @@ jobs:
           terraform_version: 1.6.6
 
       - name: Terraform Init (development)
-        run: terraform -chdir=environments/development init -backend-config="backend.hcl"
+        run: terraform init -backend-config="environments/development/backend.hcl"
 
       - name: Terraform Destroy
         run: |
-          terraform -chdir=environments/development destroy \
+          terraform destroy \
             -auto-approve \
             -input=false \
-            -var-file="terraform.tfvars"
+            -var-file="environments/development/terraform.tfvars"
 
       - name: Cleanup Summary
         run: |
