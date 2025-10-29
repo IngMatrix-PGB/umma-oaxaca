@@ -1,21 +1,21 @@
-# Imagen base Debian para evitar problemas con el instalador de code-server
+# ./docker/Dockerfile
 FROM debian:bookworm-slim
 
 # Paquetes base
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    curl ca-certificates bash apache2 \
+    curl ca-certificates bash apache2 postgresql-client \
  && rm -rf /var/lib/apt/lists/*
 
-# Instalar code-server con el instalador oficial (aquí sí funciona)
+# Instalar code-server (en Debian el install.sh funciona)
 RUN curl -fsSL https://code-server.dev/install.sh | sh
 
-# Archivos de tu app
-COPY docker/apache-hello-world/index.html /var/www/html/index.html
-COPY docker/entrypoint.sh /usr/local/bin/entrypoint.sh
+# Copiar artefactos (SIN prefijo docker/ porque el contexto es ./docker)
+COPY apache-hello-world/index.html /var/www/html/index.html
+COPY entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN chmod +x /usr/local/bin/entrypoint.sh
 
-# Exponer puertos: Apache (80) y code-server (8080)
+# Puertos: Apache 80, code-server 8080
 EXPOSE 80 8080
 
-# En Debian, Apache en foreground con apache2ctl
+# Apache se lanza desde entrypoint (junto a code-server)
 CMD ["/usr/local/bin/entrypoint.sh"]
