@@ -14,6 +14,7 @@ code_server_password = "vscode-pass"
 
 name_prefix  = "overflow-dev"
 instance_type = "t3.micro"
+environment  = "development"
 
 tags_common = {
   Project      = "overflow"
